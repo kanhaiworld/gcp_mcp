@@ -1,6 +1,6 @@
 """
-Gemini-driven GraphRAG inspector via MCP.
-Run: python test_graphrag_mcp.py
+Gemini-driven BigQuery inspector via MCP.
+Run: python test_bigquery_mcp.py
 """
 
 import asyncio
@@ -16,15 +16,10 @@ load_dotenv()
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 
 SERVER = str(Path(__file__).parent / "log_mcp_server.py")
-E2E_WORKSPACE = str(Path(__file__).parent / "e2e-test")
 
 
-async def inspect_graphrag(user_query: str):
-    transport = PythonStdioTransport(
-        script_path=SERVER,
-        python_cmd=sys.executable,
-        env={**os.environ, "GRAPH_RAG_ROOT": E2E_WORKSPACE},
-    )
+async def inspect_bigquery(user_query: str):
+    transport = PythonStdioTransport(script_path=SERVER, python_cmd=sys.executable)
     async with Client(transport) as mcp_client:
         mcp_tools = await mcp_client.list_tools()
 
@@ -63,14 +58,10 @@ async def inspect_graphrag(user_query: str):
             model_name="gemini-2.5-flash",
             tools=gemini_tools,
             system_instruction=(
-                "You are an expert at querying knowledge graphs built from codebases and incident data. "
-                "Use the graph_rag_query tool to answer questions. "
-                "IMPORTANT: always start with method='local' — it searches individual entities like errors, "
-                "handlers, configs, and services directly. Only switch to method='global' if the question "
-                "is explicitly about the overall system architecture or high-level themes. "
-                "The knowledge graph contains entities such as error types (ValidationError, ProcessingError), "
-                "dead letter topics, retry policies, message handlers, and Pub/Sub topics. "
-                "Always state which method you used and summarize findings clearly."
+                "You are a data analyst with access to BigQuery. "
+                "Use the bigquery_last_n_query tool to fetch rows from the requested table, "
+                "then summarize what you observe: the schema, notable values, patterns, or anomalies. "
+                "Always state the dataset and table you queried."
             ),
         )
 
@@ -91,7 +82,7 @@ async def inspect_graphrag(user_query: str):
                 print(f"[→ calling {fn.name}({dict(fn.args)})]")
 
                 tool_result = await mcp_client.call_tool(fn.name, dict(fn.args))
-                result_data = tool_result.content[0].text if tool_result.content else "{}"
+                result_data = tool_result.content[0].text if tool_result.content else "[]"
 
                 response = chat.send_message(
                     genai.protos.Content(
@@ -108,6 +99,7 @@ async def inspect_graphrag(user_query: str):
 
 
 if __name__ == "__main__":
-    asyncio.run(inspect_graphrag(
-        "What error types exist in this codebase and how does the system handle dead letter messages?"
+    asyncio.run(inspect_bigquery(
+        "Fetch 5 rows from the deadlift dataset, success_logs table, "
+        "and tell me what the data looks like."
     ))
