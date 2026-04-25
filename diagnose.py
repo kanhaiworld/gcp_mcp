@@ -92,6 +92,6 @@ async def diagnose_logs(user_query: str):
 
 if __name__ == "__main__":
     asyncio.run(diagnose_logs(
-        "Fetch the last 2 hours of ERROR and CRITICAL logs from Cloud Run "
+        "Fetch the last 2 ERROR and CRITICAL logs from Cloud Run "
         "and give me a diagnosis with suggested fixes."
     ))

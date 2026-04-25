@@ -128,6 +128,9 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+# GraphRAG
+e2e-test/
+
 # IDE
 .vscode/
 .idea/

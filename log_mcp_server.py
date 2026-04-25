@@ -1,50 +1,80 @@
-import os 
-from datetime import datetime, timedelta, timezone 
-from dotenv import load_dotenv 
-from fastmcp import FastMCP 
-from google.cloud import logging as gcp_logging 
+""" 
+Define all MCP tools for LQL, Graphrag and Bigquery 
+"""
+
+import os
+import subprocess
+from dotenv import load_dotenv
+from fastmcp import FastMCP
+from google.cloud import logging as gcp_logging
+from google.cloud import bigquery
 
 load_dotenv() 
 
 mcp = FastMCP() 
 
 log_client = gcp_logging.Client()
+bigquery_client = bigquery.Client(project="your-project-id")
 
-@mcp.tool() 
-def fetch_logs(
+# override with GRAPH_RAG_ROOT env var to point at a different workspace (e.g. for tests)
+GRAPH_RAG_ROOT = os.getenv(
+    "GRAPH_RAG_ROOT",
+    os.path.join(os.path.dirname(__file__), "graph_rag_workspace"),
+)
+
+@mcp.tool()
+def fetch_gcp_logs(
     resource_type: str = "cloud_run_revision",
     severity: str = "ERROR",
-    hours_back: int = 1, 
-    max_entries: int = 50, 
-) -> list[dict]:  
-    """ 
-    Fetch Recent GCP logs filtered by resource type, severity, and time range. 
+    page_size: int = 25,
+    page_token: str | None = None,
+) -> dict:
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours_back)
+    Fetch GCP logs filtered by resource type and severity, with pagination.
+    Returns the most recent `page_size` logs and a next_page_token.
+    If the relevant log isn't in the returned batch, call again with next_page_token
+    to page further back in time.
+    """
     filter_str = (
         f'resource.type="{resource_type}" '
-        f'severity>="{severity}" '
-        f'timestamp>="{cutoff.isoformat()}"'
+        f'severity>="{severity}"'
     )
 
-    entries = [] 
-    for entry in log_client.list_entries(
-        filter_=filter_str, 
-        max_results=max_entries, 
+    iterator = log_client.list_entries(
+        filter_=filter_str,
+        max_results=page_size,
         order_by=gcp_logging.DESCENDING,
-    ): 
+        page_token=page_token,
+    )
+
+    entries = []
+    for entry in iterator:
+        payload = entry.payload
+        if isinstance(payload, dict):
+            parsed_payload = payload
+        else:
+            parsed_payload = str(payload) if payload else ""
+
         entries.append({
+            "insert_id": entry.insert_id,
             "timestamp": entry.timestamp.isoformat() if entry.timestamp else None,
             "severity": entry.severity,
+            "log_name": entry.log_name,
             "resource_type": entry.resource.type if entry.resource else None,
             "resource_labels": dict(entry.resource.labels) if entry.resource else {},
-            "message": str(entry.payload) if entry.payload else "",
-            "log_name": entry.log_name,
+            "payload": parsed_payload,
         })
-    return entries 
+        if len(entries) >= page_size:
+            break
+
+    return {
+        "entries": entries,
+        "count": len(entries),
+        "next_page_token": getattr(iterator, "next_page_token", None),
+    }
 
 @mcp.tool() 
-def list_log_resource_types() -> list[str]:
+def gcp_list_log_resource_types() -> list[str]:
     """List common GCP monitored resource types for log filtering."""
     return [
         "gce_instance",
@@ -56,6 +86,68 @@ def list_log_resource_types() -> list[str]:
         "gcs_bucket",
     ]
 
+@mcp.tool()
+def graph_rag_query(
+    query: str,
+    method: str = "local",
+    response_type: str = "Multiple Paragraphs",
+    community_level: int = 2,
+) -> dict:
+    """
+    Query the GraphRAG knowledge graph built from the codebase/incident data.
+    Use method='local' or 'drift' for specific entity/error questions (best for dead letter diagnosis).
+    Use method='global' for broad questions about the whole dataset.
+    """
+    cmd = [
+        "graphrag", "query",
+        "--root", GRAPH_RAG_ROOT,
+        "--method", method,
+        "--response-type", response_type,
+        "--community-level", str(community_level),
+        query,
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
+    if result.returncode != 0:
+        return {
+            "success": False,
+            "error": result.stderr.strip() or "graphrag query failed with no stderr output",
+        }
+
+    return {
+        "success": True,
+        "method": method,
+        "response": result.stdout.strip(),
+    }
+
+@mcp.tool()
+def bigquery_last_n_query(
+    dataset: str, 
+    table: str, 
+    n: int = 10, 
+    order_by: str = "created_at"
+) -> list[dict]: 
+    """
+    Fetch the most recent N entries from a BigQuery table.
+
+    Args:
+        dataset: BigQuery dataset name
+        table: BigQuery table name
+        n: Number of rows to return (default 10, max 100)
+        order_by: Column to sort by descending (should be a timestamp or ID)
+    """
+    n = min(n, 100)  # safety cap
+    
+    query = f"""
+        SELECT *
+        FROM `{bigquery_client.project}.{dataset}.{table}`
+        ORDER BY {order_by} DESC
+        LIMIT {n}
+    """
+
+    results = bigquery_client.query(query)
+    return [dict(row) for row in results]
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run() 
