@@ -15,7 +15,7 @@ from fastmcp.client.transports import PythonStdioTransport
 load_dotenv()
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 
-SERVER = str(Path(__file__).parent / "log_mcp_server.py")
+SERVER = str(Path(__file__).parent / "mcp_server.py")
 E2E_WORKSPACE = str(Path(__file__).parent / "e2e-test")
 
 

@@ -10,7 +10,7 @@ genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 
 
 async def diagnose_logs(user_query: str):
-    async with Client("log_mcp_server.py") as mcp_client:
+    async with Client("mcp_server.py") as mcp_client:
         mcp_tools = await mcp_client.list_tools()
 
         gemini_tools = []
